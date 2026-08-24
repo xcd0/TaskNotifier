@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title description" data-design="tasknotifier-icon-v2">
+	<title id="title">TaskNotifier</title>
+	<description id="description">青い角丸タイルに白いベルと緑の通知点を配置したアイコン</description>
+	<defs>
+		<linearGradient id="tile" x1="36" y1="22" x2="224" y2="238" gradientUnits="userSpaceOnUse">
+			<stop offset="0" stop-color="#438CF5"/>
+			<stop offset="1" stop-color="#174DBB"/>
+		</linearGradient>
+	</defs>
+	<rect x="12" y="12" width="232" height="232" rx="56" fill="url(#tile)"/>
+	<path fill="#F8FBFF" d="M128 48C93 48 72 76 72 112v33c0 15-5 27-17 40-4 5 0 13 7 13h132c7 0 11-8 7-13-12-13-17-25-17-40v-33c0-36-21-64-56-64Z"/>
+	<ellipse cx="128" cy="218.5" rx="32" ry="11.5" fill="#F8FBFF"/>
+	<circle cx="184" cy="70" r="31" fill="#F8FBFF"/>
+	<circle cx="184" cy="70" r="23" fill="#2ACB82"/>
+</svg>
