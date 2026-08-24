@@ -25,7 +25,10 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $expected = "a3a05e07569b4f75c8bd890c630aaf3e2332efb91204f0c0eca27f0117bdefdb"
-          $encoded = (Get-Content -Raw "ci-input/source.b64").Trim()
+          $parts = Get-ChildItem "ci-input/source.part*" | Sort-Object Name
+          if ($parts.Count -ne 6) { throw "Expected 6 source parts, found $($parts.Count)" }
+          $encoded = (($parts | ForEach-Object { (Get-Content -Raw $_.FullName).Trim() }) -join "")
+          if ($encoded.Length -ne 71404) { throw "Encoded source length mismatch: $($encoded.Length)" }
           [IO.File]::WriteAllBytes("source.tar.xz", [Convert]::FromBase64String($encoded))
           $actual = (Get-FileHash "source.tar.xz" -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $expected) { throw "Source archive SHA-256 mismatch: expected=$expected actual=$actual" }
