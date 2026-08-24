@@ -20,8 +20,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $expectedLength = 97936
-          $expectedHash = "b0c6d95da85534c30b299cc82f82bb953f7546fa3db2d92e974ccacc9bbffff3"
+          $expectedLength = 97900
+          $expectedHash = "2dd45f7ce63b957b01b1699fafd02453d6fc175d231dbabf2082b0c4ccc203be"
           $parts = @(Get-ChildItem "ci-input/source.part*" | Sort-Object Name)
           if ($parts.Count -ne 5) { throw "Expected 5 source parts, found $($parts.Count)" }
           $encoded = (($parts | ForEach-Object { (Get-Content -Raw $_.FullName).Trim() }) -join "")
