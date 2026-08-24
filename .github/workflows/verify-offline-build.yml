@@ -20,7 +20,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           $expected = "e335da6c7c2202e101f8e682d5ded32d3e9a96f0f2547f9a3d8eb7df6d291db7"
           $parts = Get-ChildItem "ci-input/source.part*" | Sort-Object Name
-          if ($parts.Count -ne 5) { throw "Expected 5 source parts, found $($parts.Count)" }
+          if ($parts.Count -ne 11) { throw "Expected 11 source parts, found $($parts.Count)" }
           $encoded = (($parts | ForEach-Object { (Get-Content -Raw $_.FullName).Trim() }) -join "")
           if ($encoded.Length -ne 85016) { throw "Encoded source length mismatch: $($encoded.Length)" }
           [IO.File]::WriteAllBytes("source.tar.xz", [Convert]::FromBase64String($encoded))
