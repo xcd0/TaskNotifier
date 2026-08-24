@@ -1,0 +1,130 @@
+name: Verify fully offline build
+
+on:
+  push:
+    branches:
+      - ci-offline-min
+  workflow_dispatch:
+
+jobs:
+  verify-offline-build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.0'
+          cache: false
+
+      - name: Restore source archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $expected = "a3a05e07569b4f75c8bd890c630aaf3e2332efb91204f0c0eca27f0117bdefdb"
+          $encoded = (Get-Content -Raw "ci-input/source.b64").Trim()
+          [IO.File]::WriteAllBytes("source.tar.xz", [Convert]::FromBase64String($encoded))
+          $actual = (Get-FileHash "source.tar.xz" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw "Source archive SHA-256 mismatch: expected=$expected actual=$actual"
+          }
+          New-Item -ItemType Directory -Force work | Out-Null
+          tar -xJf source.tar.xz -C work
+          if ($LASTEXITCODE -ne 0) { throw "source extraction failed" }
+          if (-not (Test-Path "work/minsrc/go.mod")) { throw "restored source is incomplete" }
+
+      - name: Prepare vendored dependencies
+        shell: pwsh
+        working-directory: work/minsrc
+        run: |
+          $ErrorActionPreference = "Stop"
+          go mod download
+          if ($LASTEXITCODE -ne 0) { throw "go mod download failed" }
+          go mod vendor
+          if ($LASTEXITCODE -ne 0) { throw "go mod vendor failed" }
+          New-Item -ItemType Directory -Force tools/bin | Out-Null
+          $env:GOBIN = (Resolve-Path tools/bin).Path
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0
+          if ($LASTEXITCODE -ne 0) { throw "goversioninfo install failed" }
+          if (-not (Test-Path vendor/modules.txt)) { throw "vendor/modules.txt was not generated" }
+          if (-not (Test-Path tools/bin/goversioninfo.exe)) { throw "goversioninfo.exe was not generated" }
+
+      - name: Prove build works fully offline
+        shell: pwsh
+        working-directory: work/minsrc
+        run: |
+          $ErrorActionPreference = "Stop"
+          Remove-Item Env:HTTP_PROXY -ErrorAction SilentlyContinue
+          Remove-Item Env:HTTPS_PROXY -ErrorAction SilentlyContinue
+          Remove-Item Env:ALL_PROXY -ErrorAction SilentlyContinue
+          $env:NO_PROXY = "*"
+          $env:GOPROXY = "off"
+          $env:GOSUMDB = "off"
+          $env:GOFLAGS = "-mod=vendor"
+          $emptyModCache = Join-Path $env:RUNNER_TEMP "tasknotifier-empty-modcache"
+          if (Test-Path $emptyModCache) { Remove-Item -Recurse -Force $emptyModCache }
+          New-Item -ItemType Directory -Force $emptyModCache | Out-Null
+          $env:GOMODCACHE = $emptyModCache
+          go clean -cache
+          if ($LASTEXITCODE -ne 0) { throw "go clean failed" }
+          go test ./internal/tasknotifier
+          if ($LASTEXITCODE -ne 0) { throw "offline go test failed" }
+          ./scripts/build.ps1
+          if ($LASTEXITCODE -ne 0) { throw "offline build.ps1 failed" }
+
+      - name: Verify EXE and PWA package
+        shell: pwsh
+        working-directory: work/minsrc
+        run: |
+          $ErrorActionPreference = "Stop"
+          $releaseZip = Get-ChildItem "dist/TaskNotifier-v*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $releaseZip) { throw "release ZIP was not generated" }
+          $verify = Join-Path $env:RUNNER_TEMP "tasknotifier-release-verify"
+          if (Test-Path $verify) { Remove-Item -Recurse -Force $verify }
+          Expand-Archive $releaseZip.FullName -DestinationPath $verify
+          if (-not (Test-Path (Join-Path $verify "exe/TaskNotifier.exe"))) { throw "EXE is missing from release ZIP" }
+          if (-not (Test-Path (Join-Path $verify "pwa/index.html"))) { throw "PWA index.html is missing from release ZIP" }
+          $exe = Get-Item (Join-Path $verify "exe/TaskNotifier.exe")
+          if ($exe.Length -le 0) { throw "TaskNotifier.exe is empty" }
+          Write-Host "Verified release ZIP: $($releaseZip.Name)"
+          Write-Host "TaskNotifier.exe bytes: $($exe.Length)"
+
+      - name: Create offline source package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $source = Resolve-Path "work/minsrc"
+          $releaseZip = Get-ChildItem "$source/dist/TaskNotifier-v*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $tokyo = [System.TimeZoneInfo]::FindSystemTimeZoneById("Tokyo Standard Time")
+          $stamp = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tokyo).ToString("yyyyMMdd-HHmm")
+          $rootName = "TaskNotifier-Offline-CI-$stamp"
+          $root = Join-Path (Get-Location) $rootName
+          New-Item -ItemType Directory -Force "$root/source/tasknotifier" | Out-Null
+          New-Item -ItemType Directory -Force "$root/release" | Out-Null
+          Copy-Item "$source/*" "$root/source/tasknotifier" -Recurse -Force
+          Copy-Item $releaseZip.FullName "$root/release/$($releaseZip.Name)" -Force
+          @"
+          TaskNotifier fully offline build package
+
+          Verified by GitHub Actions on Windows with:
+          GOPROXY=off
+          GOSUMDB=off
+          GOFLAGS=-mod=vendor
+          empty GOMODCACHE
+
+          Run source/tasknotifier/scripts/build.ps1 without network access.
+          release/ contains the EXE + PWA ZIP built from this same source.
+          "@ | Set-Content -Encoding UTF8 "$root/OFFLINE-BUILD-VERIFIED.txt"
+          $package = Join-Path (Get-Location) "$rootName.zip"
+          Compress-Archive -Path $root -DestinationPath $package
+          "OFFLINE_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload verified offline package
+        uses: actions/upload-artifact@v4
+        with:
+          name: tasknotifier-verified-offline
+          path: ${{ env.OFFLINE_PACKAGE }}
+          if-no-files-found: error
