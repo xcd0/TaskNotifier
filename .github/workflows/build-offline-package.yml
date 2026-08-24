@@ -1,0 +1,97 @@
+name: Build offline TaskNotifier package
+
+on:
+  push:
+    branches:
+      - offline-build
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout helper branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract encoded source snapshot
+        shell: bash
+        run: git show 2fc637d1a5fed296db1dd08e12a3dc2024edcd87:ci-source/src.part00 > source.b64
+
+      - name: Restore latest TaskNotifier source snapshot
+        shell: pwsh
+        run: |
+          $base64 = (Get-Content -Raw source.b64).Trim()
+          [IO.File]::WriteAllBytes("source.zip", [Convert]::FromBase64String($base64))
+          Expand-Archive source.zip -DestinationPath work
+          Copy-Item offline-overlay/build.ps1 work/tasknotifier_ci_source/scripts/build.ps1 -Force
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.0'
+          cache: false
+
+      - name: Prepare vendored offline dependencies
+        shell: pwsh
+        working-directory: work/tasknotifier_ci_source
+        run: |
+          go mod download
+          if ($LASTEXITCODE -ne 0) { throw "go mod download failed" }
+          go mod vendor
+          if ($LASTEXITCODE -ne 0) { throw "go mod vendor failed" }
+          New-Item -ItemType Directory -Force tools/bin | Out-Null
+          $env:GOBIN = (Resolve-Path tools/bin).Path
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0
+          if ($LASTEXITCODE -ne 0) { throw "goversioninfo install failed" }
+
+      - name: Verify offline mode
+        shell: pwsh
+        working-directory: work/tasknotifier_ci_source
+        run: |
+          $env:GOPROXY = "off"
+          $env:GOSUMDB = "off"
+          $env:GOFLAGS = "-mod=vendor"
+          go test ./internal/tasknotifier
+          if ($LASTEXITCODE -ne 0) { throw "offline go test failed" }
+
+      - name: Build current EXE and PWA offline
+        shell: pwsh
+        working-directory: work/tasknotifier_ci_source
+        run: |
+          ./scripts/build.ps1
+
+      - name: Create single offline project ZIP
+        shell: pwsh
+        run: |
+          $source = Resolve-Path work/tasknotifier_ci_source
+          $releaseZip = Get-ChildItem "$source/dist/TaskNotifier-v*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $releaseZip) { throw "release zip was not generated" }
+          $stamp = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, [System.TimeZoneInfo]::FindSystemTimeZoneById("Tokyo Standard Time")).ToString("yyyyMMdd-HHmm")
+          $root = "TaskNotifier-Project-$stamp"
+          New-Item -ItemType Directory -Force "$root/source" | Out-Null
+          New-Item -ItemType Directory -Force "$root/release" | Out-Null
+          Copy-Item $source "$root/source/tasknotifier" -Recurse
+          Copy-Item $releaseZip.FullName "$root/release/$($releaseZip.Name)"
+          @"
+          # TaskNotifier offline package
+
+          - `source/tasknotifier/vendor/` is included.
+          - `source/tasknotifier/tools/bin/goversioninfo.exe` is included.
+          - `scripts/build.ps1` forces GOPROXY=off and GOFLAGS=-mod=vendor.
+          - Running `scripts/build.ps1` requires no Internet access.
+          - `release/` contains the EXE + PWA ZIP built from this same source.
+          "@ | Set-Content -Encoding UTF8 "$root/README-OFFLINE.md"
+          Compress-Archive -Path $root -DestinationPath "TaskNotifier-Project-$stamp.zip"
+          "PACKAGE=TaskNotifier-Project-$stamp.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload offline project
+        uses: actions/upload-artifact@v4
+        with:
+          name: tasknotifier-offline-project
+          path: ${{ env.PACKAGE }}
+          if-no-files-found: error
