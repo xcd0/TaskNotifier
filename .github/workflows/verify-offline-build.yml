@@ -2,40 +2,38 @@ name: Verify fully offline build
 
 on:
   push:
-    branches:
-      - ci-offline-min
+    branches: [ci-offline-min]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   verify-offline-build:
     runs-on: windows-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.24.0'
           cache: false
-
       - name: Restore source archive
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $expected = "a3a05e07569b4f75c8bd890c630aaf3e2332efb91204f0c0eca27f0117bdefdb"
-          $encoded = (Get-Content -Raw "ci-input/source.b64").Trim()
+          $expectedLength = 97936
+          $expectedHash = "b0c6d95da85534c30b299cc82f82bb953f7546fa3db2d92e974ccacc9bbffff3"
+          $parts = @(Get-ChildItem "ci-input/source.part*" | Sort-Object Name)
+          if ($parts.Count -ne 5) { throw "Expected 5 source parts, found $($parts.Count)" }
+          $encoded = (($parts | ForEach-Object { (Get-Content -Raw $_.FullName).Trim() }) -join "")
+          if ($encoded.Length -ne $expectedLength) { throw "Encoded source length mismatch: expected=$expectedLength actual=$($encoded.Length)" }
+          if (($encoded.Length % 4) -ne 0) { throw "Encoded source length is not valid Base64: $($encoded.Length)" }
           [IO.File]::WriteAllBytes("source.tar.xz", [Convert]::FromBase64String($encoded))
-          $actual = (Get-FileHash "source.tar.xz" -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne $expected) {
-            throw "Source archive SHA-256 mismatch: expected=$expected actual=$actual"
-          }
+          $actualHash = (Get-FileHash "source.tar.xz" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) { throw "Source archive SHA-256 mismatch: expected=$expectedHash actual=$actualHash" }
           New-Item -ItemType Directory -Force work | Out-Null
           tar -xJf source.tar.xz -C work
           if ($LASTEXITCODE -ne 0) { throw "source extraction failed" }
           if (-not (Test-Path "work/minsrc/go.mod")) { throw "restored source is incomplete" }
-
       - name: Prepare vendored dependencies
         shell: pwsh
         working-directory: work/minsrc
@@ -43,16 +41,17 @@ jobs:
           $ErrorActionPreference = "Stop"
           go mod download
           if ($LASTEXITCODE -ne 0) { throw "go mod download failed" }
+          go mod verify
+          if ($LASTEXITCODE -ne 0) { throw "go mod verify failed" }
           go mod vendor
           if ($LASTEXITCODE -ne 0) { throw "go mod vendor failed" }
           New-Item -ItemType Directory -Force tools/bin | Out-Null
           $env:GOBIN = (Resolve-Path tools/bin).Path
           go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0
           if ($LASTEXITCODE -ne 0) { throw "goversioninfo install failed" }
-          if (-not (Test-Path vendor/modules.txt)) { throw "vendor/modules.txt was not generated" }
-          if (-not (Test-Path tools/bin/goversioninfo.exe)) { throw "goversioninfo.exe was not generated" }
-
-      - name: Prove build works fully offline
+          if (-not (Test-Path vendor/modules.txt)) { throw "vendor/modules.txt missing" }
+          if (-not (Test-Path tools/bin/goversioninfo.exe)) { throw "goversioninfo.exe missing" }
+      - name: Prove fully offline build
         shell: pwsh
         working-directory: work/minsrc
         run: |
@@ -70,29 +69,28 @@ jobs:
           $env:GOMODCACHE = $emptyModCache
           go clean -cache
           if ($LASTEXITCODE -ne 0) { throw "go clean failed" }
-          go test ./internal/tasknotifier
+          go vet ./...
+          if ($LASTEXITCODE -ne 0) { throw "offline go vet failed" }
+          go test ./...
           if ($LASTEXITCODE -ne 0) { throw "offline go test failed" }
           ./scripts/build.ps1
           if ($LASTEXITCODE -ne 0) { throw "offline build.ps1 failed" }
-
-      - name: Verify EXE and PWA package
+      - name: Verify release package
         shell: pwsh
         working-directory: work/minsrc
         run: |
           $ErrorActionPreference = "Stop"
           $releaseZip = Get-ChildItem "dist/TaskNotifier-v*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $releaseZip) { throw "release ZIP was not generated" }
+          if (-not $releaseZip) { throw "release ZIP missing" }
           $verify = Join-Path $env:RUNNER_TEMP "tasknotifier-release-verify"
           if (Test-Path $verify) { Remove-Item -Recurse -Force $verify }
           Expand-Archive $releaseZip.FullName -DestinationPath $verify
-          if (-not (Test-Path (Join-Path $verify "exe/TaskNotifier.exe"))) { throw "EXE is missing from release ZIP" }
-          if (-not (Test-Path (Join-Path $verify "pwa/index.html"))) { throw "PWA index.html is missing from release ZIP" }
-          $exe = Get-Item (Join-Path $verify "exe/TaskNotifier.exe")
-          if ($exe.Length -le 0) { throw "TaskNotifier.exe is empty" }
-          Write-Host "Verified release ZIP: $($releaseZip.Name)"
-          Write-Host "TaskNotifier.exe bytes: $($exe.Length)"
-
-      - name: Create offline source package
+          $entries = @(Get-ChildItem $verify -File | Sort-Object Name)
+          if ($entries.Count -ne 2) { throw "release ZIP must contain exactly two files" }
+          if (-not (Test-Path (Join-Path $verify "TaskNotifier.exe"))) { throw "TaskNotifier.exe missing" }
+          if (-not (Test-Path (Join-Path $verify "BUILD-INFO.txt"))) { throw "BUILD-INFO.txt missing" }
+          if ((Get-Item (Join-Path $verify "TaskNotifier.exe")).Length -le 0) { throw "TaskNotifier.exe is empty" }
+      - name: Create verified offline package
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -106,24 +104,11 @@ jobs:
           New-Item -ItemType Directory -Force "$root/release" | Out-Null
           Copy-Item "$source/*" "$root/source/tasknotifier" -Recurse -Force
           Copy-Item $releaseZip.FullName "$root/release/$($releaseZip.Name)" -Force
-          @"
-          TaskNotifier fully offline build package
-
-          Verified by GitHub Actions on Windows with:
-          GOPROXY=off
-          GOSUMDB=off
-          GOFLAGS=-mod=vendor
-          empty GOMODCACHE
-
-          Run source/tasknotifier/scripts/build.ps1 without network access.
-          release/ contains the EXE + PWA ZIP built from this same source.
-          "@ | Set-Content -Encoding UTF8 "$root/OFFLINE-BUILD-VERIFIED.txt"
+          "Verified with GOPROXY=off, GOSUMDB=off, GOFLAGS=-mod=vendor, and an empty GOMODCACHE." | Set-Content -Encoding UTF8 "$root/OFFLINE-BUILD-VERIFIED.txt"
           $package = Join-Path (Get-Location) "$rootName.zip"
           Compress-Archive -Path $root -DestinationPath $package
           "OFFLINE_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      - name: Upload verified offline package
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: tasknotifier-verified-offline
           path: ${{ env.OFFLINE_PACKAGE }}
