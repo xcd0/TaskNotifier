@@ -18,10 +18,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Extract encoded source snapshot
+        shell: bash
+        run: git show 2fc637d1a5fed296db1dd08e12a3dc2024edcd87:ci-source/src.part00 > source.b64
+
       - name: Restore latest TaskNotifier source snapshot
         shell: pwsh
         run: |
-          git show 2fc637d1a5fed296db1dd08e12a3dc2024edcd87:ci-source/src.part00 | Out-File -Encoding ascii source.b64
           $base64 = (Get-Content -Raw source.b64).Trim()
           [IO.File]::WriteAllBytes("source.zip", [Convert]::FromBase64String($base64))
           Expand-Archive source.zip -DestinationPath work
