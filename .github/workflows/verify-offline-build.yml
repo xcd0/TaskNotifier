@@ -14,25 +14,9 @@ jobs:
         with:
           go-version: '1.24.0'
           cache: false
-      - name: Restore source archive
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $expected = "e335da6c7c2202e101f8e682d5ded32d3e9a96f0f2547f9a3d8eb7df6d291db7"
-          $parts = Get-ChildItem "ci-input/source.part*" | Sort-Object Name
-          if ($parts.Count -ne 11) { throw "Expected 11 source parts, found $($parts.Count)" }
-          $encoded = (($parts | ForEach-Object { (Get-Content -Raw $_.FullName).Trim() }) -join "")
-          if ($encoded.Length -ne 85016) { throw "Encoded source length mismatch: $($encoded.Length)" }
-          [IO.File]::WriteAllBytes("source.tar.xz", [Convert]::FromBase64String($encoded))
-          $actual = (Get-FileHash "source.tar.xz" -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne $expected) { throw "Source archive SHA-256 mismatch: expected=$expected actual=$actual" }
-          New-Item -ItemType Directory -Force work | Out-Null
-          tar -xJf source.tar.xz -C work
-          if ($LASTEXITCODE -ne 0) { throw "source extraction failed" }
-          if (-not (Test-Path "work/minsrc/go.mod")) { throw "restored source is incomplete" }
+
       - name: Prepare vendored dependencies
         shell: pwsh
-        working-directory: work/minsrc
         run: |
           $ErrorActionPreference = "Stop"
           go mod download
@@ -45,9 +29,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "goversioninfo install failed" }
           if (-not (Test-Path vendor/modules.txt)) { throw "vendor/modules.txt missing" }
           if (-not (Test-Path tools/bin/goversioninfo.exe)) { throw "goversioninfo.exe missing" }
+
       - name: Prove fully offline build
         shell: pwsh
-        working-directory: work/minsrc
         run: |
           $ErrorActionPreference = "Stop"
           Remove-Item Env:HTTP_PROXY -ErrorAction SilentlyContinue
@@ -67,9 +51,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "offline go test failed" }
           ./scripts/build.ps1
           if ($LASTEXITCODE -ne 0) { throw "offline build.ps1 failed" }
+
       - name: Verify EXE and PWA package
         shell: pwsh
-        working-directory: work/minsrc
         run: |
           $ErrorActionPreference = "Stop"
           $releaseZip = Get-ChildItem "dist/TaskNotifier-v*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -83,24 +67,26 @@ jobs:
           if (-not (Test-Path $pwaPath)) { throw "PWA missing from release ZIP" }
           if ((Get-Item $exePath).Length -le 0) { throw "EXE is empty" }
           Write-Host "Verified $($releaseZip.Name)"
+
       - name: Create verified offline package
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $source = Resolve-Path "work/minsrc"
+          $source = Resolve-Path "."
           $releaseZip = Get-ChildItem "$source/dist/TaskNotifier-v*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           $tokyo = [System.TimeZoneInfo]::FindSystemTimeZoneById("Tokyo Standard Time")
           $stamp = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tokyo).ToString("yyyyMMdd-HHmm")
-          $rootName = "TaskNotifier-Offline-CI-$stamp"
-          $root = Join-Path (Get-Location) $rootName
+          $rootName = "TaskNotifier-Project-$stamp"
+          $root = Join-Path $env:RUNNER_TEMP $rootName
           New-Item -ItemType Directory -Force "$root/source/tasknotifier" | Out-Null
           New-Item -ItemType Directory -Force "$root/release" | Out-Null
           Copy-Item "$source/*" "$root/source/tasknotifier" -Recurse -Force
           Copy-Item $releaseZip.FullName "$root/release/$($releaseZip.Name)" -Force
           "Verified on GitHub Actions with GOPROXY=off, GOSUMDB=off, GOFLAGS=-mod=vendor, empty GOMODCACHE." | Set-Content -Encoding UTF8 "$root/OFFLINE-BUILD-VERIFIED.txt"
-          $package = Join-Path (Get-Location) "$rootName.zip"
+          $package = Join-Path $env:RUNNER_TEMP "$rootName.zip"
           Compress-Archive -Path $root -DestinationPath $package
           "OFFLINE_PACKAGE=$package" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - uses: actions/upload-artifact@v4
         with:
           name: tasknotifier-verified-offline
