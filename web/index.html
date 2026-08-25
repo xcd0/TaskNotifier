@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="ja">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'self'; worker-src 'self'; manifest-src 'self'">
+	<title>TaskNotifier</title>
+	<!-- TASKNOTIFIER_PWA_HEAD -->
+	<style>/* TASKNOTIFIER_STYLE */</style>
+</head>
+<body>
+	<div id="app" class="app-shell">
+		<div id="runtime-banner" class="runtime-banner" hidden>
+			<strong>PWA機能制限版</strong>
+			<span>設定はこのブラウザに保存されます。PWAを閉じている間の指定時刻通知、BAT/CMD実行、Windows自動起動はEXE版限定です。</span>
+		</div>
+		<header class="app-header">
+			<div>
+				<h1>TaskNotifier</h1>
+				<p>PCの稼働中に、必要な確認を忘れないための通知管理</p>
+			</div>
+			<button id="test-notification" class="button secondary" type="button">1分後にテスト通知</button>
+		</header>
+
+		<nav class="tabs" aria-label="管理画面">
+			<button class="tab active" type="button" data-view="tasks">タスク</button>
+			<button class="tab" type="button" data-view="periods">期間設定</button>
+			<button class="tab" type="button" data-view="pomodoro">Pomodoro</button>
+			<button class="tab" type="button" data-view="history">通知履歴</button>
+			<button class="tab" type="button" data-view="settings">設定</button>
+		</nav>
+
+		<main>
+			<section id="view-tasks" class="view active" aria-labelledby="tasks-title">
+				<div class="section-heading">
+					<div>
+						<h2 id="tasks-title">タスク</h2>
+						<p>通知条件と通知方法をタスクごとに管理します。</p>
+					</div>
+					<div class="toolbar">
+						<label class="switch-label"><input id="hide-disabled" type="checkbox">無効タスクを非表示</label>
+						<label class="switch-label"><input id="hide-completed" type="checkbox">完了TODOを非表示</label>
+						<button id="reload" class="button ghost" type="button">再読み込み</button>
+						<button id="import-tasks" class="button ghost" type="button" hidden>tasks.jsonをインポート</button>
+						<button id="open-tasks" class="button ghost" type="button">tasks.jsonを開く</button>
+						<button id="add-task" class="button primary" type="button">＋ タスクを追加</button>
+					</div>
+				</div>
+
+				<div class="table-frame">
+					<table>
+						<thead>
+							<tr>
+								<th data-task-column="state">状態</th>
+								<th data-task-column="title">タイトル</th>
+								<th data-task-column="schedule">通知条件</th>
+								<th data-task-column="condition">条件</th>
+								<th data-task-column="notification">通知方法</th>
+								<th data-task-column="next">次回通知</th>
+								<th class="actions-column" data-task-column="actions">操作</th>
+							</tr>
+						</thead>
+						<tbody id="task-rows"></tbody>
+					</table>
+					<div id="task-empty" class="empty-state" hidden>
+						<strong>表示するタスクがありません</strong>
+						<span>「タスクを追加」から最初の通知を登録できます。</span>
+					</div>
+				</div>
+			</section>
+
+			<section id="view-periods" class="view" aria-labelledby="periods-title" hidden>
+				<div class="section-heading">
+					<div>
+						<h2 id="periods-title">期間設定</h2>
+						<p>1日の時間帯へ名前を付けます。期間は重複しても構いません。</p>
+					</div>
+					<button id="add-period" class="button primary" type="button">＋ 期間を追加</button>
+				</div>
+				<div class="table-frame">
+					<table>
+						<thead>
+							<tr>
+								<th>名称</th>
+								<th>開始</th>
+								<th>終了</th>
+								<th>範囲</th>
+								<th class="actions-column">操作</th>
+							</tr>
+						</thead>
+						<tbody id="period-rows"></tbody>
+					</table>
+					<div id="period-empty" class="empty-state" hidden>
+						<strong>期間がありません</strong>
+						<span>期間条件を使う場合は時間帯を追加してください。</span>
+					</div>
+				</div>
+			</section>
+
+			<section id="view-history" class="view" aria-labelledby="history-title" hidden>
+				<div class="section-heading">
+					<div>
+						<h2 id="history-title">通知履歴</h2>
+						<p>独自ダイアログを表示、またはOS通知を送信した記録です。</p>
+					</div>
+					<button id="clear-history" class="button danger" type="button">履歴を消去</button>
+				</div>
+				<div class="table-frame">
+					<table>
+						<thead>
+							<tr>
+								<th>通知予定</th>
+								<th>実際の通知</th>
+								<th>タイトル</th>
+								<th>通知方法</th>
+								<th>結果</th>
+							</tr>
+						</thead>
+						<tbody id="history-rows"></tbody>
+					</table>
+					<div id="history-empty" class="empty-state" hidden>
+						<strong>通知履歴はまだありません</strong>
+						<span>通知が行われると、ここへ新しい順で表示されます。</span>
+					</div>
+				</div>
+			</section>
+
+			<section id="view-pomodoro" class="view" aria-labelledby="pomodoro-title" hidden>
+				<div class="section-heading">
+					<div>
+						<h2 id="pomodoro-title">Pomodoroタイマー</h2>
+						<p>作業と休憩を交互に繰り返す集中タイマーです。EXE版・PWA版の共通機能です。</p>
+					</div>
+				</div>
+				<div class="pomodoro-layout">
+					<section class="pomodoro-clock" aria-live="polite">
+						<div id="pomodoro-phase" class="pomodoro-phase">作業</div>
+						<div id="pomodoro-time" class="pomodoro-time">25:00</div>
+						<div id="pomodoro-count" class="pomodoro-count">完了した作業: 0 回</div>
+						<div class="toolbar pomodoro-actions">
+							<button id="pomodoro-start" class="button primary" type="button">開始</button>
+							<button id="pomodoro-reset" class="button secondary" type="button">リセット</button>
+							<button id="pomodoro-skip" class="button ghost" type="button">次へ</button>
+						</div>
+					</section>
+					<section class="settings-card pomodoro-settings">
+						<div class="field"><label for="pomodoro-work">作業時間（分）</label><input id="pomodoro-work" type="number" min="1" max="180" value="25"></div>
+						<div class="field"><label for="pomodoro-short">短い休憩（分）</label><input id="pomodoro-short" type="number" min="1" max="60" value="5"></div>
+						<div class="field"><label for="pomodoro-long">長い休憩（分）</label><input id="pomodoro-long" type="number" min="1" max="120" value="15"></div>
+						<div class="field"><label for="pomodoro-long-every">長い休憩までの作業回数</label><input id="pomodoro-long-every" type="number" min="1" max="12" value="4"></div>
+					</section>
+				</div>
+			</section>
+
+			<section id="view-settings" class="view" aria-labelledby="settings-title" hidden>
+				<div class="section-heading">
+					<div>
+						<h2 id="settings-title">設定</h2>
+						<p>TaskNotifier全体の動作を設定します。</p>
+					</div>
+				</div>
+
+				<section id="pwa-settings-card" class="settings-card" aria-labelledby="pwa-title" hidden>
+					<div>
+						<h3 id="pwa-title">PWA版について</h3>
+						<p>タスク・期間・曜日条件・履歴・オフライン起動に対応します。通知はPWAを開いている間だけローカル時刻監視を行います。</p>
+					</div>
+					<p class="capability-note">PWAを閉じた状態での正確な時刻通知、BAT/CMD実行、Windowsのログオン時起動管理はEXE版を使用してください。</p>
+				</section>
+
+				<section id="column-settings-card" class="settings-card" aria-labelledby="column-settings-title">
+					<div>
+						<h3 id="column-settings-title">タスク一覧の列表示</h3>
+						<p>タスク一覧に表示する列を選択します。設定はこの実行環境に保存されます。</p>
+					</div>
+					<div class="column-visibility-grid">
+						<label class="switch-label"><input type="checkbox" data-column-setting="state" checked>状態</label>
+						<label class="switch-label"><input type="checkbox" data-column-setting="title" checked>タイトル</label>
+						<label class="switch-label"><input type="checkbox" data-column-setting="schedule" checked>通知条件</label>
+						<label class="switch-label"><input type="checkbox" data-column-setting="condition" checked>条件</label>
+						<label class="switch-label"><input type="checkbox" data-column-setting="notification" checked>通知方法</label>
+						<label class="switch-label"><input type="checkbox" data-column-setting="next" checked>次回通知</label>
+						<label class="switch-label"><input type="checkbox" data-column-setting="actions" checked>操作</label>
+					</div>
+					<div class="toolbar"><button id="reset-column-visibility" class="button ghost" type="button">すべて表示に戻す</button></div>
+				</section>
+
+				<section id="startup-settings-card" class="settings-card" aria-labelledby="startup-title">
+					<div>
+						<h3 id="startup-title">起動設定</h3>
+						<p>Windowsへログオンしたときに、このEXEを自動で起動します。</p>
+					</div>
+					<div class="toolbar">
+						<label class="switch-label"><input id="autostart" type="checkbox">ログオン時に起動</label>
+						<button id="update-autostart" class="button secondary" type="button" hidden>登録パスを更新</button>
+					</div>
+				</section>
+
+				<section id="version-settings-card" class="settings-card" aria-labelledby="version-title">
+					<div>
+						<h3 id="version-title">バージョン情報</h3>
+						<p>バージョン: <strong id="version-value">development</strong></p>
+						<p>実行形態: <strong id="runtime-value">確認中...</strong></p>
+					</div>
+				</section>
+			</section>
+		</main>
+
+		<footer id="status" class="status-bar">起動中...</footer>
+	</div>
+
+	<dialog id="task-dialog" class="editor-dialog">
+		<form id="task-form" method="dialog">
+			<div class="dialog-header">
+				<div>
+					<h2 id="task-dialog-title">タスクを追加</h2>
+					<p>必要な項目だけをONにして設定します。</p>
+				</div>
+				<button class="icon-button" type="button" data-close-dialog="task-dialog" aria-label="閉じる">×</button>
+			</div>
+
+			<div class="dialog-content">
+				<input id="task-id" type="hidden">
+				<div class="field">
+					<label for="task-kind">タスク種別</label>
+					<select id="task-kind">
+						<option value="notification">通知タスク</option>
+						<option value="todo">TODO（通知なし）</option>
+					</select>
+					<p class="field-help">TODOは時刻や通知方法を持たず、完了／未完了だけを管理します。</p>
+				</div>
+				<div id="task-enabled-container" class="field horizontal-field">
+					<div>
+						<label for="task-enabled">有効</label>
+						<p class="field-help">タスク自体を有効／無効にします。無効時は通知を含む処理を停止します。</p>
+					</div>
+					<label class="toggle"><input id="task-enabled" type="checkbox"><span></span></label>
+				</div>
+
+				<div class="field">
+					<label for="task-title" title="通知画面と通知履歴へ表示するタスク名です。">タイトル <span class="required">必須</span><span class="info" tabindex="0" data-tooltip="通知画面と通知履歴へ表示するタスク名です。">?</span></label>
+					<input id="task-title" type="text" maxlength="120" autocomplete="off" required>
+				</div>
+
+				<fieldset id="notification-task-options">
+					<legend>通知タイミング</legend>
+					<div class="form-grid">
+						<div class="field">
+							<label for="schedule-type" title="定刻、基準時刻からランダムに後ろへずらす、または指定分数だけ前へずらす方法を選びます。">通知時刻の決め方 <span class="info" tabindex="0" data-tooltip="定刻、基準時刻からランダムに後ろへずらす、または指定分数だけ前へずらす方法を選びます。">?</span></label>
+							<select id="schedule-type">
+								<option value="daily_fixed">毎日・定刻</option>
+								<option value="daily_random_after">毎日・0〜n分後</option>
+								<option value="daily_before">毎日・n分前</option>
+							</select>
+						</div>
+						<div class="field">
+							<label for="schedule-time" title="毎日の最初の通知の基準時刻です。24時間表記で指定します。">通知開始時刻 <span class="info" tabindex="0" data-tooltip="毎日の最初の通知の基準時刻です。24時間表記で指定します。">?</span></label>
+							<input id="schedule-time" type="time" required>
+						</div>
+						<div id="schedule-minutes-field" class="field" hidden>
+							<label id="schedule-minutes-label" for="schedule-minutes" title="基準時刻から前後へ補正する分数です。">補正分数</label>
+							<input id="schedule-minutes" type="number" min="0" max="1440" step="1">
+						</div>
+					</div>
+				</fieldset>
+
+				<fieldset>
+					<legend>任意設定</legend>
+					<label class="option-switch"><input id="repeat-enabled" type="checkbox"><span><strong>通知間隔</strong><small>開始後に一定間隔で繰り返し通知します。</small></span></label>
+					<div id="repeat-options" class="nested-options" hidden>
+						<div class="field">
+							<label for="interval-minutes" title="開始後、次の通知を出すまでの間隔です。1〜1440分の範囲で指定します。">通知間隔（分） <span class="info" tabindex="0" data-tooltip="開始後、次の通知を出すまでの間隔です。1〜1440分の範囲で指定します。">?</span></label>
+							<input id="interval-minutes" type="number" min="1" max="1440" step="1">
+						</div>
+						<label class="option-switch compact"><input id="end-enabled" type="checkbox"><span><strong>通知終了時刻を設定</strong></span></label>
+						<div id="end-time-field" class="field" hidden>
+							<label for="end-time" title="この時刻を含む候補まで通知します。開始時刻より前なら翌日の時刻として扱います。">通知終了時刻 <span class="info" tabindex="0" data-tooltip="この時刻を含む候補まで通知します。開始時刻より前なら翌日の時刻として扱います。">?</span></label>
+							<input id="end-time" type="time">
+						</div>
+					</div>
+
+					<label class="option-switch"><input id="period-enabled" type="checkbox"><span><strong>期間条件</strong><small>計算された通知時刻が選択期間内の場合だけ通知します。</small></span></label>
+					<div id="period-field" class="nested-options" hidden>
+						<div class="field">
+							<label for="period-id" title="通知候補を許可する時間帯を選びます。">対象期間</label>
+							<select id="period-id"></select>
+						</div>
+					</div>
+
+					<label class="option-switch"><input id="weekdays-enabled" type="checkbox"><span><strong>曜日条件</strong><small>計算された通知日時が選択した曜日の場合だけ通知します。</small></span></label>
+					<div id="weekdays-field" class="nested-options" hidden>
+						<div class="weekday-grid" role="group" aria-label="通知する曜日">
+							<label class="weekday-choice"><input type="checkbox" name="weekday" value="mon"><span>月</span></label>
+							<label class="weekday-choice"><input type="checkbox" name="weekday" value="tue"><span>火</span></label>
+							<label class="weekday-choice"><input type="checkbox" name="weekday" value="wed"><span>水</span></label>
+							<label class="weekday-choice"><input type="checkbox" name="weekday" value="thu"><span>木</span></label>
+							<label class="weekday-choice"><input type="checkbox" name="weekday" value="fri"><span>金</span></label>
+							<label class="weekday-choice"><input type="checkbox" name="weekday" value="sat"><span>土</span></label>
+							<label class="weekday-choice"><input type="checkbox" name="weekday" value="sun"><span>日</span></label>
+						</div>
+					</div>
+
+					<label class="option-switch"><input id="bat-enabled" type="checkbox"><span><strong>BAT / CMD</strong><small>独自ダイアログのボタンから手動実行できます。</small></span></label>
+					<div id="bat-options" class="nested-options" hidden>
+						<div class="field">
+							<label for="bat-path" title="独自ダイアログの「実行して確認済み」から手動実行するファイルです。">BATまたはCMDファイル</label>
+							<div class="input-action">
+								<input id="bat-path" type="text" autocomplete="off">
+								<button id="browse-bat" class="button secondary" type="button">参照...</button>
+							</div>
+						</div>
+						<label class="check-label"><input id="show-console" type="checkbox">実行時にコンソールを表示</label>
+					</div>
+				</fieldset>
+
+				<fieldset id="notification-method-options">
+					<legend>通知</legend>
+					<label class="option-switch"><input id="notification-enabled" type="checkbox"><span><strong>通知を有効にする</strong><small>タスク自体は有効なまま、通知だけを停止できます。</small></span></label>
+					<div class="field-help">通知方法</div>
+					<div class="choice-grid">
+						<label class="choice-card"><input type="radio" name="notification-method" value="os"><span><strong>OS通知</strong><small>Windowsの通知領域へ送信します。</small></span></label>
+						<label class="choice-card"><input type="radio" name="notification-method" value="dialog"><span><strong>独自ダイアログ</strong><small>確認操作をするまで画面へ残します。</small></span></label>
+					</div>
+				</fieldset>
+			</div>
+
+			<div class="dialog-actions">
+				<button class="button ghost" type="button" data-close-dialog="task-dialog">キャンセル</button>
+				<button class="button primary" type="submit">保存</button>
+			</div>
+		</form>
+	</dialog>
+
+	<dialog id="period-dialog" class="editor-dialog small-dialog">
+		<form id="period-form" method="dialog">
+			<div class="dialog-header">
+				<div>
+					<h2 id="period-dialog-title">期間を追加</h2>
+					<p>開始・終了は必要な側だけをONにできます。</p>
+				</div>
+				<button class="icon-button" type="button" data-close-dialog="period-dialog" aria-label="閉じる">×</button>
+			</div>
+			<div class="dialog-content">
+				<input id="period-edit-id" type="hidden">
+				<div class="field">
+					<label for="period-name" title="タスクの期間条件などへ表示する時間帯の名称です。">名称 <span class="required">必須</span></label>
+					<input id="period-name" type="text" maxlength="80" autocomplete="off" required>
+				</div>
+				<label class="option-switch"><input id="period-start-enabled" type="checkbox"><span><strong>開始時刻</strong><small>OFFの場合は00:00からです。</small></span></label>
+				<div id="period-start-field" class="nested-options" hidden>
+					<div class="field"><input id="period-start-time" type="time"></div>
+				</div>
+				<label class="option-switch"><input id="period-end-enabled" type="checkbox"><span><strong>終了時刻</strong><small>OFFの場合は24:00までです。開始以前なら日を跨ぎます。</small></span></label>
+				<div id="period-end-field" class="nested-options" hidden>
+					<div class="field"><input id="period-end-time" type="time"></div>
+				</div>
+			</div>
+			<div class="dialog-actions">
+				<button class="button ghost" type="button" data-close-dialog="period-dialog">キャンセル</button>
+				<button class="button primary" type="submit">保存</button>
+			</div>
+		</form>
+	</dialog>
+
+	<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+	<div id="loading" class="loading" aria-live="polite">
+		<span></span>
+		<div class="loading-text">
+			<strong>TaskNotifierを読み込んでいます...</strong>
+			<small>この表示が続く場合は、EXEと同じ場所のTaskNotifier.logを確認してください。</small>
+		</div>
+	</div>
+	<script>/* TASKNOTIFIER_SCRIPT */</script>
+</body>
+</html>
