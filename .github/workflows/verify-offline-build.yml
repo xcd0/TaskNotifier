@@ -1,12 +1,12 @@
-name: Verify fully offline Windows build
+name: Build fully offline TaskNotifier package
 
 on:
-  pull_request:
-    branches: [main]
+  push:
+    branches: [ci-source-tree]
   workflow_dispatch:
 
 jobs:
-  verify-offline-build:
+  build-offline-package:
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -33,7 +33,7 @@ jobs:
           if (-not (Test-Path vendor/modules.txt)) { throw "vendor/modules.txt missing" }
           if (-not (Test-Path tools/bin/goversioninfo.exe)) { throw "goversioninfo.exe missing" }
 
-      - name: Prove Windows build works fully offline
+      - name: Build EXE and PWA fully offline
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -52,34 +52,69 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "go clean failed" }
           go test ./internal/tasknotifier
           if ($LASTEXITCODE -ne 0) { throw "offline package compile failed" }
-          New-Item -ItemType Directory -Force dist | Out-Null
-          go build -buildvcs=false -trimpath -o dist/TaskNotifier.exe ./cmd/tasknotifier
-          if ($LASTEXITCODE -ne 0) { throw "offline Windows build failed" }
-          if (-not (Test-Path dist/TaskNotifier.exe)) { throw "TaskNotifier.exe missing" }
-          if ((Get-Item dist/TaskNotifier.exe).Length -le 0) { throw "TaskNotifier.exe is empty" }
-          Write-Host "Offline Windows build verified: $((Get-Item dist/TaskNotifier.exe).Length) bytes"
+          ./scripts/build.ps1
+          if ($LASTEXITCODE -ne 0) { throw "offline build.ps1 failed" }
 
-      - name: Create dependency artifact
+      - name: Verify combined release ZIP
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force offline-artifact | Out-Null
-          Copy-Item vendor offline-artifact/vendor -Recurse
-          New-Item -ItemType Directory -Force offline-artifact/tools/bin | Out-Null
-          Copy-Item tools/bin/goversioninfo.exe offline-artifact/tools/bin/goversioninfo.exe
-          Copy-Item dist/TaskNotifier.exe offline-artifact/TaskNotifier-CI.exe
-          @"
-          Verified by GitHub Actions with:
-          GOPROXY=off
-          GOSUMDB=off
-          GOFLAGS=-mod=vendor
-          empty GOMODCACHE
-          HTTP_PROXY/HTTPS_PROXY/ALL_PROXY removed
-          "@ | Set-Content -Encoding UTF8 offline-artifact/OFFLINE-CI-VERIFIED.txt
+          $releaseZip = Get-ChildItem "dist/TaskNotifier-v*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $releaseZip) { throw "combined EXE + PWA release ZIP missing" }
+          $verify = Join-Path $env:RUNNER_TEMP "tasknotifier-release-verify"
+          if (Test-Path $verify) { Remove-Item -Recurse -Force $verify }
+          Expand-Archive $releaseZip.FullName -DestinationPath $verify
+          $exePath = Join-Path $verify "exe/TaskNotifier.exe"
+          $pwaPath = Join-Path $verify "pwa/index.html"
+          if (-not (Test-Path $exePath)) { throw "TaskNotifier.exe missing from release ZIP" }
+          if (-not (Test-Path $pwaPath)) { throw "PWA index.html missing from release ZIP" }
+          if ((Get-Item $exePath).Length -le 0) { throw "TaskNotifier.exe is empty" }
+          Write-Host "Verified release: $($releaseZip.Name)"
+          Write-Host "EXE bytes: $((Get-Item $exePath).Length)"
 
-      - name: Upload verified offline dependencies
+      - name: Create downloadable project ZIP
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $releaseZip = Get-ChildItem "dist/TaskNotifier-v*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $releaseZip) { throw "release ZIP missing" }
+          $tokyo = [System.TimeZoneInfo]::FindSystemTimeZoneById("Tokyo Standard Time")
+          $stamp = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tokyo).ToString("yyyyMMdd-HHmm")
+          $rootName = "TaskNotifier-Project-$stamp"
+          $root = Join-Path $env:RUNNER_TEMP $rootName
+          New-Item -ItemType Directory -Force "$root/source/tasknotifier" | Out-Null
+          New-Item -ItemType Directory -Force "$root/release" | Out-Null
+
+          Copy-Item * "$root/source/tasknotifier" -Recurse -Force
+          if (Test-Path "$root/source/tasknotifier/dist") { Remove-Item "$root/source/tasknotifier/dist" -Recurse -Force }
+          Copy-Item $releaseZip.FullName "$root/release/$($releaseZip.Name)" -Force
+
+          @"
+          TaskNotifier fully offline build package
+
+          GitHub Actions verified this source with:
+          - HTTP_PROXY / HTTPS_PROXY / ALL_PROXY removed
+          - GOPROXY=off
+          - GOSUMDB=off
+          - GOFLAGS=-mod=vendor
+          - empty GOMODCACHE
+          - go clean -cache
+          - go test ./internal/tasknotifier
+          - scripts/build.ps1
+
+          release/ contains the EXE + PWA ZIP built from this exact source.
+          source/tasknotifier/vendor/ and tools/bin/goversioninfo.exe are included.
+          "@ | Set-Content -Encoding UTF8 "$root/OFFLINE-BUILD-VERIFIED.txt"
+
+          $projectZip = Join-Path $env:RUNNER_TEMP "$rootName.zip"
+          Compress-Archive -Path $root -DestinationPath $projectZip
+          "PROJECT_ZIP=$projectZip" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PROJECT_NAME=$rootName" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload TaskNotifier project
         uses: actions/upload-artifact@v4
         with:
-          name: tasknotifier-offline-dependencies
-          path: offline-artifact
+          name: ${{ env.PROJECT_NAME }}
+          path: ${{ env.PROJECT_ZIP }}
           if-no-files-found: error
+          compression-level: 0
