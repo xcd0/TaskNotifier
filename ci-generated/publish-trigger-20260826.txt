@@ -1,0 +1,1 @@
+trigger full offline EXE + PWA project artifact
