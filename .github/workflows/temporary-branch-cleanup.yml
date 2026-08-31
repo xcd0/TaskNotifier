@@ -1,0 +1,38 @@
+name: Temporary branch cleanup
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  delete-finished-branches:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete integrated and obsolete branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          branches=(
+            ci-blob-offline
+            ci-offline-blob-final
+            ci-offline-final
+            ci-offline-min
+            ci-offline-pass
+            ci-offline-verify
+            ci-source-tree
+            offline-build
+            offline-build-run
+          )
+
+          for branch in "${branches[@]}"; do
+            gh api \
+              --method DELETE \
+              "repos/${GITHUB_REPOSITORY}/git/refs/heads/${branch}"
+            echo "Deleted ${branch}"
+          done
