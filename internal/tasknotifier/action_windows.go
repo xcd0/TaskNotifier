@@ -71,8 +71,14 @@ func BuildBatchLaunch(executableDirectory string, action TaskAction) (BatchLaunc
 	return BatchLaunch{ComSpec: comSpec, CommandText: commandText, Directory: filepath.Dir(path), HideWindow: !action.ShowConsole}, nil
 }
 
-// RunBatch はBAT/CMDの終了まで待機し、終了コードを返す。
-func RunBatch(executableDirectory string, action TaskAction) (BatchResult, error) {
+// RunBatch は互換用にBAT/CMDを実行し、終了コードが0以外ならエラーを返す。
+func RunBatch(executableDirectory string, action TaskAction) error {
+	_, err := RunBatchWithResult(executableDirectory, action)
+	return err
+}
+
+// RunBatchWithResult はBAT/CMDの終了まで待機し、終了コードを返す。
+func RunBatchWithResult(executableDirectory string, action TaskAction) (BatchResult, error) {
 	launch, err := BuildBatchLaunch(executableDirectory, action)
 	if err != nil {
 		return BatchResult{}, err
