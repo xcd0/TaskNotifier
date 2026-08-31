@@ -1,6 +1,7 @@
 package tasknotifier
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
