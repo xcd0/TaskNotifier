@@ -1,0 +1,1 @@
+Trigger Windows offline build verification after AppData storage changes.
