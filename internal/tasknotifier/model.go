@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -98,5 +99,5 @@ func EffectiveNotificationMethod(t Task)string{if t.Notification.Method==Notific
 func AppendHistory(d TaskFile,e HistoryEntry)TaskFile{d=cloneTaskFile(d);d.History=append(d.History,e);if len(d.History)>HistoryLimit{d.History=append([]HistoryEntry(nil),d.History[len(d.History)-HistoryLimit:]...)};return d}
 
 type Paths struct{Executable,Directory,Tasks,LegacyTasks,Log string}
-func ResolvePaths(executable string)(Paths,error){a,e:=filepath.Abs(executable);if e!=nil{return Paths{},fmt.Errorf("EXEパスを解決できません: %w",e)};a=filepath.Clean(a);d:=filepath.Dir(a);return Paths{Executable:a,Directory:d,Tasks:filepath.Join(d,TaskFileName),LegacyTasks:filepath.Join(d,LegacyTaskFileName),Log:filepath.Join(d,"TaskNotifier.log")},nil}
+func ResolvePaths(executable string)(Paths,error){a,e:=filepath.Abs(executable);if e!=nil{return Paths{},fmt.Errorf("EXEパスを解決できません: %w",e)};a=filepath.Clean(a);d:=filepath.Dir(a);config,e:=os.UserConfigDir();if e!=nil{return Paths{},fmt.Errorf("ユーザー設定ディレクトリを取得できません: %w",e)};dataDir:=filepath.Join(config,"TaskNotifier");if e:=os.MkdirAll(dataDir,0o700);e!=nil{return Paths{},fmt.Errorf("TaskNotifier設定ディレクトリを作成できません: %w",e)};legacy:=filepath.Join(d,TaskFileName);if _,e:=os.Stat(legacy);errors.Is(e,os.ErrNotExist){legacy=filepath.Join(d,LegacyTaskFileName)};return Paths{Executable:a,Directory:d,Tasks:filepath.Join(dataDir,TaskFileName),LegacyTasks:legacy,Log:filepath.Join(dataDir,"TaskNotifier.log")},nil}
 func ResolveBATPath(directory,configured string)string{configured=strings.TrimSpace(configured);if configured==""{return ""};if filepath.IsAbs(configured){return filepath.Clean(configured)};return filepath.Clean(filepath.Join(directory,configured))}
