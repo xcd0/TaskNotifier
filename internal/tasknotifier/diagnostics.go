@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+const maxDiagnosticLogSize = 5 * 1024 * 1024
+
 var BuildVersion = "development"
 
 func StartDiagnosticLogging(preferredPath string) (*os.File, string, error) {
@@ -20,11 +22,13 @@ func StartDiagnosticLogging(preferredPath string) (*os.File, string, error) {
 
 	var failures []string
 	for _, candidate := range candidates {
-		if sameCleanPath(candidate, fallbackPath) {
-			if err := os.MkdirAll(filepath.Dir(candidate), 0o700); err != nil {
-				failures = append(failures, fmt.Sprintf("%s: %v", candidate, err))
-				continue
-			}
+		if err := os.MkdirAll(filepath.Dir(candidate), 0o700); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", candidate, err))
+			continue
+		}
+		if err := rotateDiagnosticLog(candidate); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", candidate, err))
+			continue
 		}
 		file, err := os.OpenFile(candidate, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
@@ -42,6 +46,28 @@ func StartDiagnosticLogging(preferredPath string) (*os.File, string, error) {
 		return file, candidate, nil
 	}
 	return nil, "", fmt.Errorf("診断ログを作成できません: %s", strings.Join(failures, " / "))
+}
+
+func rotateDiagnosticLog(path string) error {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("ログファイルを確認できません: %w", err)
+	}
+	if info.Size() <= maxDiagnosticLogSize {
+		return nil
+	}
+
+	oldPath := path + ".old"
+	if err := os.Remove(oldPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("旧ログを削除できません: %w", err)
+	}
+	if err := os.Rename(path, oldPath); err != nil {
+		return fmt.Errorf("ログをローテーションできません: %w", err)
+	}
+	return nil
 }
 
 func sameCleanPath(left, right string) bool {
