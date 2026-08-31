@@ -5,6 +5,7 @@ package tasknotifier
 import (
 	"fmt"
 	"log"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -180,6 +181,27 @@ func (app *App) createNotifyIcon() error {
 		return notifyIcon.ContextMenu().Actions().Add(action)
 	}
 	if err := addAction("開く", app.showMainWindow); err != nil {
+		return err
+	}
+	if err := addAction("設定ファイルを開く", func() {
+		if err := exec.Command("notepad.exe", app.paths.Tasks).Start(); err != nil {
+			app.showError("tasks.jsonを開けません", err)
+		}
+	}); err != nil {
+		return err
+	}
+	if err := addAction("設定フォルダを開く", func() {
+		if err := exec.Command("explorer.exe", "/select,", app.paths.Tasks).Start(); err != nil {
+			app.showError("設定フォルダを開けません", err)
+		}
+	}); err != nil {
+		return err
+	}
+	if err := addAction("ログフォルダを開く", func() {
+		if err := exec.Command("explorer.exe", "/select,", app.paths.Log).Start(); err != nil {
+			app.showError("ログフォルダを開けません", err)
+		}
+	}); err != nil {
 		return err
 	}
 	if err := addAction("1分後にテスト通知", app.scheduleTestNotification); err != nil {
@@ -390,16 +412,23 @@ func (app *App) finishPopup(dialog *walk.Dialog, event Event, handled *bool, sno
 	if *handled {
 		return
 	}
+	batchResultText := ""
 	if runBAT {
 		task, ok := app.taskByID(event.TaskID)
 		if !ok {
 			app.showErrorText("BAT実行", "対象タスクが見つかりません")
 			return
 		}
-		if err := RunBatch(app.paths.Directory, task.Action); err != nil {
-			app.showError("BATを起動できません", err)
+		result, err := RunBatchWithResult(app.paths.Directory, task.Action)
+		if err != nil {
+			resultText := fmt.Sprintf("BAT実行失敗 (exit=%d): %v", result.ExitCode, err)
+			if historyErr := app.recordHistory(event, NotificationDialog, resultText); historyErr != nil {
+				log.Printf("BAT実行失敗履歴を保存できません: %v", historyErr)
+			}
+			app.showError("BATを実行できません", err)
 			return
 		}
+		batchResultText = fmt.Sprintf("BAT実行成功 (exit=%d)", result.ExitCode)
 	}
 
 	if event.IsTest {
@@ -414,6 +443,9 @@ func (app *App) finishPopup(dialog *walk.Dialog, event Event, handled *bool, sno
 			candidate, err = Snooze(current, event, time.Now(), 10*time.Minute)
 		} else {
 			candidate, err = Acknowledge(current, event)
+		}
+		if err == nil && batchResultText != "" {
+			candidate = AppendHistory(candidate, newHistoryEntry(event, NotificationDialog, batchResultText, time.Now()))
 		}
 		if err == nil {
 			err = app.save(candidate)
