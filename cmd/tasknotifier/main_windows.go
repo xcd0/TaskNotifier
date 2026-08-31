@@ -61,11 +61,11 @@ func main() {
 	log.Printf("application paths tasks=%q legacy=%q", paths.Tasks, paths.LegacyTasks)
 	migrated, err := tasknotifier.MigrateLegacyTaskFile(paths)
 	if err != nil {
-		showFatal("tasks.txtをtasks.jsonへ移行できません", err)
+		showFatal("既存のタスク設定をAppDataへ移行できません", err)
 		return
 	}
 	if migrated {
-		log.Printf("tasks.txtをtasks.jsonへ移行しました。")
+		log.Printf("既存のタスク設定をAppDataへ移行しました。")
 	}
 	store := tasknotifier.NewStore(paths.Tasks)
 	if err := store.RecoverTemporary(); err != nil {
