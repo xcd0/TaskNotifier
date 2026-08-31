@@ -19,8 +19,33 @@ type BatchLaunch struct {
 	HideWindow  bool
 }
 
+type BatchResult struct {
+	ExitCode int
+}
+
+// NormalizeBATPath はBAT/CMDパスを絶対パスへ正規化する。
+// 旧設定の相対パスは互換性のためEXEディレクトリ基準で解決する。
+func NormalizeBATPath(executableDirectory, configured string) (string, error) {
+	configured = strings.TrimSpace(configured)
+	if configured == "" {
+		return "", nil
+	}
+	path := configured
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(executableDirectory, path)
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("BATファイルの絶対パスを取得できません: %w", err)
+	}
+	return filepath.Clean(absolute), nil
+}
+
 func BuildBatchLaunch(executableDirectory string, action TaskAction) (BatchLaunch, error) {
-	path := ResolveBATPath(executableDirectory, action.BatPath)
+	path, err := NormalizeBATPath(executableDirectory, action.BatPath)
+	if err != nil {
+		return BatchLaunch{}, err
+	}
 	if path == "" {
 		return BatchLaunch{}, errors.New("BATファイルが登録されていません")
 	}
@@ -43,22 +68,25 @@ func BuildBatchLaunch(executableDirectory string, action TaskAction) (BatchLaunc
 		return BatchLaunch{}, fmt.Errorf("cmd.exeを確認できません: %w", err)
 	}
 	commandText := `""` + path + `""`
-	return BatchLaunch{ComSpec: comSpec, CommandText: commandText, Directory: executableDirectory, HideWindow: !action.ShowConsole}, nil
+	return BatchLaunch{ComSpec: comSpec, CommandText: commandText, Directory: filepath.Dir(path), HideWindow: !action.ShowConsole}, nil
 }
 
-func RunBatch(executableDirectory string, action TaskAction) error {
+// RunBatch はBAT/CMDの終了まで待機し、終了コードを返す。
+func RunBatch(executableDirectory string, action TaskAction) (BatchResult, error) {
 	launch, err := BuildBatchLaunch(executableDirectory, action)
 	if err != nil {
-		return err
+		return BatchResult{}, err
 	}
 	command := exec.Command(launch.ComSpec, "/D", "/S", "/C", launch.CommandText)
 	command.Dir = launch.Directory
 	if launch.HideWindow {
 		command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	}
-	if err := command.Start(); err != nil {
-		return fmt.Errorf("BATを起動できません: %w", err)
+	if err := command.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return BatchResult{ExitCode: exitErr.ExitCode()}, fmt.Errorf("BATが終了コード%dで失敗しました: %w", exitErr.ExitCode(), err)
+		}
+		return BatchResult{}, fmt.Errorf("BATを実行できません: %w", err)
 	}
-	_ = command.Process.Release()
-	return nil
+	return BatchResult{ExitCode: command.ProcessState.ExitCode()}, nil
 }
