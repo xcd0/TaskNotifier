@@ -15,7 +15,8 @@ import (
 )
 
 type arguments struct {
-	Background bool `arg:"--background" help:"メイン画面を表示せずタスクトレイへ常駐する"`
+	Background  bool   `arg:"--background" help:"メイン画面を表示せずタスクトレイへ常駐する"`
+	BatchRunner string `arg:"--batch-runner" help:"内部用BAT完了監視ID"`
 }
 
 func init() {
@@ -27,6 +28,10 @@ func main() {
 	args, err := ParseArgs()
 	if err != nil {
 		showFatal("起動オプションが不正です", err)
+		return
+	}
+	if args.BatchRunner != "" {
+		runBatchRunner(args.BatchRunner)
 		return
 	}
 
@@ -113,6 +118,17 @@ func ParseArgs() (arguments, error) {
 		return arguments{}, err
 	}
 	return args, nil
+}
+
+func runBatchRunner(runID string) {
+	executable, err := os.Executable()
+	if err == nil {
+		err = tasknotifier.RunBatchRunner(executable, runID)
+	}
+	if err != nil {
+		log.Printf("BAT完了監視に失敗しました run_id=%q: %v", runID, err)
+		os.Exit(1)
+	}
 }
 
 func normalizeBatchPaths(data *tasknotifier.TaskFile, executableDirectory string) (bool, error) {
