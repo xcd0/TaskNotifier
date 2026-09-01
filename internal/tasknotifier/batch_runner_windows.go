@@ -88,9 +88,8 @@ func StartPersistentBatchRun(paths Paths, event Event, action TaskAction) (strin
 		_ = os.Remove(requestPath)
 		return "", fmt.Errorf("BAT完了監視プロセスを開始できません: %w", err)
 	}
-	if err := command.Process.Release(); err != nil {
-		return runID, fmt.Errorf("BAT完了監視プロセスを分離できません: %w", err)
-	}
+	// 子プロセスは親TaskNotifierの終了後も継続するため、親側のプロセスハンドルだけを解放する。
+	_ = command.Process.Release()
 	return runID, nil
 }
 
@@ -103,6 +102,10 @@ func RunBatchRunner(executable, runID string) error {
 	if err != nil {
 		return err
 	}
+	return runBatchRunnerWithPaths(paths, runID)
+}
+
+func runBatchRunnerWithPaths(paths Paths, runID string) error {
 	request, err := readBatchRunRequest(batchRunRequestPath(paths, runID))
 	if err != nil {
 		return fmt.Errorf("BAT実行要求を読み込めません: %w", err)
@@ -140,14 +143,14 @@ func RunBatchRunner(executable, runID string) error {
 
 // MergePendingBatchRunResults は未取り込みの完了結果を通知履歴へ重ねる。
 // 同じrun_idの結果はEventKeyで検出し、何度読み込んでも重複追加しない。
-func MergePendingBatchRunResults(paths Paths, data TaskFile) (TaskFile, []string, error) {
+func MergePendingBatchRunResults(paths Paths, data TaskFile) (TaskFile, []string, bool, error) {
 	directory := batchRunsDirectory(paths)
 	entries, err := os.ReadDir(directory)
 	if errors.Is(err, os.ErrNotExist) {
-		return data, nil, nil
+		return data, nil, false, nil
 	}
 	if err != nil {
-		return data, nil, fmt.Errorf("BAT実行結果ディレクトリを確認できません: %w", err)
+		return data, nil, false, fmt.Errorf("BAT実行結果ディレクトリを確認できません: %w", err)
 	}
 
 	resultNames := make([]string, 0)
@@ -160,14 +163,15 @@ func MergePendingBatchRunResults(paths Paths, data TaskFile) (TaskFile, []string
 
 	merged := cloneTaskFile(data)
 	consumed := make([]string, 0, len(resultNames))
+	changed := false
 	for _, name := range resultNames {
 		path := filepath.Join(directory, name)
 		result, err := readBatchRunResult(path)
 		if err != nil {
-			return data, nil, fmt.Errorf("BAT実行結果 %q を読み込めません: %w", name, err)
+			return data, nil, false, fmt.Errorf("BAT実行結果 %q を読み込めません: %w", name, err)
 		}
 		if err := validateBatchRunID(result.RunID); err != nil {
-			return data, nil, fmt.Errorf("BAT実行結果 %q: %w", name, err)
+			return data, nil, false, fmt.Errorf("BAT実行結果 %q: %w", name, err)
 		}
 		historyKey := batchHistoryEventKey(result.EventKey, result.RunID)
 		if !historyContainsEventKey(merged.History, historyKey) {
@@ -183,10 +187,11 @@ func MergePendingBatchRunResults(paths Paths, data TaskFile) (TaskFile, []string
 			if len(merged.History) > HistoryLimit {
 				merged.History = append([]HistoryEntry(nil), merged.History[len(merged.History)-HistoryLimit:]...)
 			}
+			changed = true
 		}
 		consumed = append(consumed, result.RunID)
 	}
-	return merged, consumed, nil
+	return merged, consumed, changed, nil
 }
 
 // CleanupBatchRunResults はstate.jsonへの取り込み完了後に要求・結果ファイルを削除する。
