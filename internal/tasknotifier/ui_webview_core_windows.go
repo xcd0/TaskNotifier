@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/jchv/go-webview2/pkg/edge"
-	"github.com/lxn/walk"
 	"log"
 	"os"
 	"path/filepath"
