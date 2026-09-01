@@ -273,6 +273,9 @@ func (app *App) scan(checkFile bool) {
 	if checkFile {
 		app.reload(false)
 	}
+	if err := app.consumeBatchRunResults(); err != nil {
+		log.Printf("BAT完了結果を取り込めません: %v", err)
+	}
 	data := app.snapshot()
 	due := DueEvents(data, time.Now())
 	if app.active != nil {
@@ -418,7 +421,7 @@ func (app *App) finishPopup(dialog *walk.Dialog, event Event, handled *bool, sno
 			app.showErrorText("BAT実行", "対象タスクが見つかりません")
 			return
 		}
-		process, err := StartBatch(app.paths.Directory, task.Action)
+		runID, err := StartPersistentBatchRun(app.paths, event, task.Action)
 		if err != nil {
 			resultText := "BAT起動失敗: " + err.Error()
 			if historyErr := app.recordHistory(event, NotificationDialog, resultText); historyErr != nil {
@@ -427,8 +430,7 @@ func (app *App) finishPopup(dialog *walk.Dialog, event Event, handled *bool, sno
 			app.showError("BATを起動できません", err)
 			return
 		}
-		log.Printf("BAT非同期実行開始 task_id=%q path=%q", event.TaskID, task.Action.BatPath)
-		app.trackBatchCompletion(event, process)
+		log.Printf("BAT永続実行開始 run_id=%q task_id=%q path=%q", runID, event.TaskID, task.Action.BatPath)
 	}
 
 	if event.IsTest {
@@ -461,35 +463,24 @@ func (app *App) finishPopup(dialog *walk.Dialog, event Event, handled *bool, sno
 	app.scan(false)
 }
 
-// trackBatchCompletion はBAT/CMDの終了だけをバックグラウンドで待ち、完了時に履歴へ記録する。
-func (app *App) trackBatchCompletion(event Event, process *BatchProcess) {
-	go func() {
-		result, err := process.Wait()
-		resultText := fmt.Sprintf("BAT実行成功 (exit=%d)", result.ExitCode)
-		if err != nil {
-			if result.ExitCode != 0 {
-				resultText = fmt.Sprintf("BAT実行失敗 (exit=%d): %v", result.ExitCode, err)
-			} else {
-				resultText = "BAT実行失敗: " + err.Error()
-			}
+func (app *App) consumeBatchRunResults() error {
+	merged, runIDs, changed, err := MergePendingBatchRunResults(app.paths, app.snapshot())
+	if err != nil {
+		return err
+	}
+	if len(runIDs) == 0 {
+		return nil
+	}
+	if changed {
+		if err := app.save(merged); err != nil {
+			return fmt.Errorf("BAT完了履歴を保存できません: %w", err)
 		}
-		log.Printf("BAT非同期実行完了 task_id=%q result=%q", event.TaskID, resultText)
-
-		select {
-		case <-app.done:
-			log.Printf("TaskNotifier終了後のためBAT完了履歴を保存しません task_id=%q", event.TaskID)
-			return
-		default:
-		}
-		app.mw.Synchronize(func() {
-			if app.exiting {
-				return
-			}
-			if historyErr := app.recordHistory(event, NotificationDialog, resultText); historyErr != nil {
-				log.Printf("BAT完了履歴を保存できません: %v", historyErr)
-			}
-		})
-	}()
+	}
+	if err := CleanupBatchRunResults(app.paths, runIDs); err != nil {
+		return err
+	}
+	log.Printf("BAT完了結果を取り込みました count=%d", len(runIDs))
+	return nil
 }
 
 func (app *App) scheduleTestNotification() {
