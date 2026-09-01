@@ -93,3 +93,35 @@ func TestBatchRunnerPersistsAndMergesResult(t *testing.T) {
 		t.Fatalf("result.jsonが残っています: %v", err)
 	}
 }
+
+func TestRecoverInterruptedBatchRun(t *testing.T) {
+	directory := t.TempDir()
+	paths := Paths{Executable: os.Args[0], Directory: directory, Tasks: filepath.Join(directory, TaskFileName)}
+	runID := "fedcba9876543210fedcba9876543210"
+	now := time.Now().Truncate(time.Second)
+	request := batchRunRequest{
+		RunID:       runID,
+		EventKey:    "event-interrupted",
+		TaskID:      "task-interrupted",
+		TaskTitle:   "中断テスト",
+		ScheduledAt: now.Add(-time.Minute).Format(time.RFC3339),
+		RequestedAt: now.Add(-time.Minute).Format(time.RFC3339),
+		Action:      TaskAction{BatPath: filepath.Join(directory, "dummy.cmd")},
+	}
+	if err := writeJSONAtomic(batchRunRequestPath(paths, runID), request); err != nil {
+		t.Fatalf("実行要求を保存できません: %v", err)
+	}
+	if err := RecoverInterruptedBatchRuns(paths, now); err != nil {
+		t.Fatalf("中断を復旧できません: %v", err)
+	}
+	result, err := readBatchRunResult(batchRunResultPath(paths, runID))
+	if err != nil {
+		t.Fatalf("中断結果を読み込めません: %v", err)
+	}
+	if !result.Interrupted {
+		t.Fatalf("中断結果になっていません: %+v", result)
+	}
+	if got := formatBatchRunResult(result); got != "BAT実行中断" {
+		t.Fatalf("中断履歴文言が不正です: %q", got)
+	}
+}

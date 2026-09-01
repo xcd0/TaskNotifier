@@ -42,7 +42,7 @@ function Restore-GeneratedWebUI {
 	[IO.File]::WriteAllBytes($webViewPath, $webViewBytes)
 
 	$webViewHash = (Get-FileHash $webViewPath -Algorithm SHA256).Hash.ToLowerInvariant()
-	if ($webViewHash -ne "2740c766465f6fb98cd615caa19b86b96d578fbcfb9658e196182f149866f046") {
+	if ($webViewHash -ne "e65606a305123f3cb0c735b7193b28590edd1a422afb361aebfbbc71847f85d7") {
 		throw "Generated WebView2 HTML hash mismatch: $webViewHash"
 	}
 
@@ -63,7 +63,7 @@ function Restore-GeneratedWebUI {
 	[IO.File]::WriteAllText((Join-Path $pwaRelease "index.html"), $pwaHtml, $utf8)
 
 	$pwaHash = (Get-FileHash (Join-Path $pwaRelease "index.html") -Algorithm SHA256).Hash.ToLowerInvariant()
-	if ($pwaHash -ne "29b202f8041dd79ee882559758a264644786693ac7ad89100e1d059a577ebbdd") {
+	if ($pwaHash -ne "cb7d29b1078bb63a1d251ceb9538c4ebd843d546e6b02fec2d7989ca8737e8ea") {
 		throw "Generated PWA HTML hash mismatch: $pwaHash"
 	}
 

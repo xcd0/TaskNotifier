@@ -24,13 +24,16 @@ const (
 )
 
 type batchRunRequest struct {
-	RunID       string     `json:"run_id"`
-	EventKey    string     `json:"event_key"`
-	TaskID      string     `json:"task_id"`
-	TaskTitle   string     `json:"task_title"`
-	ScheduledAt string     `json:"scheduled_at"`
-	RequestedAt string     `json:"requested_at"`
-	Action      TaskAction `json:"action"`
+	RunID           string     `json:"run_id"`
+	EventKey        string     `json:"event_key"`
+	TaskID          string     `json:"task_id"`
+	TaskTitle       string     `json:"task_title"`
+	ScheduledAt     string     `json:"scheduled_at"`
+	RequestedAt     string     `json:"requested_at"`
+	RunnerPID       int        `json:"runner_pid,omitempty"`
+	RunnerStartedAt string     `json:"runner_started_at,omitempty"`
+	BatchStartedAt  string     `json:"batch_started_at,omitempty"`
+	Action          TaskAction `json:"action"`
 }
 
 type batchRunResult struct {
@@ -41,8 +44,19 @@ type batchRunResult struct {
 	ScheduledAt string `json:"scheduled_at"`
 	FinishedAt  string `json:"finished_at"`
 	Started     bool   `json:"started"`
+	Interrupted bool   `json:"interrupted,omitempty"`
 	ExitCode    int    `json:"exit_code"`
 	Error       string `json:"error,omitempty"`
+}
+
+// BatchRunView は管理画面へ表示するBAT/CMD実行状況を表す。
+type BatchRunView struct {
+	RunID      string `json:"run_id"`
+	TaskTitle  string `json:"task_title"`
+	BATPath    string `json:"bat_path"`
+	StartedAt  string `json:"started_at"`
+	Status     string `json:"status"`
+	StatusText string `json:"status_text"`
 }
 
 // StartPersistentBatchRun は実行要求を永続化し、完了監視用の別TaskNotifierプロセスを開始する。
@@ -114,6 +128,16 @@ func runBatchRunnerWithPaths(paths Paths, runID string) error {
 		return errors.New("BAT実行要求のrun_idが一致しません")
 	}
 
+	runnerStartedAt, startTimeErr := currentProcessStartTime()
+	if startTimeErr != nil {
+		runnerStartedAt = time.Now()
+	}
+	request.RunnerPID = os.Getpid()
+	request.RunnerStartedAt = runnerStartedAt.Format(time.RFC3339Nano)
+	if err := writeJSONAtomic(batchRunRequestPath(paths, runID), request); err != nil {
+		return fmt.Errorf("BAT実行要求へrunner情報を保存できません: %w", err)
+	}
+
 	result := batchRunResult{
 		RunID:       request.RunID,
 		EventKey:    request.EventKey,
@@ -125,6 +149,10 @@ func runBatchRunnerWithPaths(paths Paths, runID string) error {
 	process, startErr := StartBatch(paths.Directory, request.Action)
 	if startErr == nil {
 		result.Started = true
+		request.BatchStartedAt = time.Now().Format(time.RFC3339)
+		if err := writeJSONAtomic(batchRunRequestPath(paths, runID), request); err != nil {
+			result.Error = "BAT開始時刻を保存できません: " + err.Error()
+		}
 		batchResult, waitErr := process.Wait()
 		result.ExitCode = batchResult.ExitCode
 		if waitErr != nil {
@@ -237,16 +265,124 @@ func validateBatchRunID(runID string) error {
 	return nil
 }
 
+// RecoverInterruptedBatchRuns は監視プロセスが消失した実行要求を中断結果へ変換する。
+func RecoverInterruptedBatchRuns(paths Paths, now time.Time) error {
+	directory := batchRunsDirectory(paths)
+	entries, err := os.ReadDir(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("BAT実行ディレクトリを確認できません: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), batchRequestSuffix) {
+			continue
+		}
+		runID := strings.TrimSuffix(entry.Name(), batchRequestSuffix)
+		if _, err := os.Stat(batchRunResultPath(paths, runID)); err == nil {
+			continue
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		request, err := readBatchRunRequest(batchRunRequestPath(paths, runID))
+		if err != nil {
+			return fmt.Errorf("BAT実行要求 %q を読み込めません: %w", runID, err)
+		}
+		requestedAt, _ := time.Parse(time.RFC3339, request.RequestedAt)
+		if request.RunnerPID == 0 && now.Sub(requestedAt) < 15*time.Second {
+			continue
+		}
+		if sameRunningProcess(request.RunnerPID, request.RunnerStartedAt) {
+			continue
+		}
+		result := batchRunResult{
+			RunID:       request.RunID,
+			EventKey:    request.EventKey,
+			TaskID:      request.TaskID,
+			TaskTitle:   request.TaskTitle,
+			ScheduledAt: request.ScheduledAt,
+			FinishedAt:  now.Format(time.RFC3339),
+			Started:     request.BatchStartedAt != "",
+			Interrupted: true,
+			ExitCode:    -1,
+			Error:       "BAT完了監視プロセスが終了しました",
+		}
+		if err := writeJSONAtomic(batchRunResultPath(paths, runID), result); err != nil {
+			return fmt.Errorf("BAT中断結果を保存できません: %w", err)
+		}
+	}
+	return nil
+}
+
+// ListBatchRuns は現在のBAT/CMD実行要求を表示用に列挙する。
+func ListBatchRuns(paths Paths, now time.Time) ([]BatchRunView, error) {
+	if err := RecoverInterruptedBatchRuns(paths, now); err != nil {
+		return nil, err
+	}
+	directory := batchRunsDirectory(paths)
+	entries, err := os.ReadDir(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return []BatchRunView{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("BAT実行ディレクトリを確認できません: %w", err)
+	}
+	views := make([]BatchRunView, 0)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), batchRequestSuffix) {
+			continue
+		}
+		runID := strings.TrimSuffix(entry.Name(), batchRequestSuffix)
+		request, err := readBatchRunRequest(batchRunRequestPath(paths, runID))
+		if err != nil {
+			continue
+		}
+		view := BatchRunView{RunID: runID, TaskTitle: request.TaskTitle, BATPath: request.Action.BatPath, StartedAt: request.BatchStartedAt, Status: "starting", StatusText: "起動中"}
+		if view.StartedAt == "" {
+			view.StartedAt = request.RequestedAt
+		}
+		if result, err := readBatchRunResult(batchRunResultPath(paths, runID)); err == nil {
+			switch {
+			case result.Interrupted:
+				view.Status, view.StatusText = "interrupted", "中断"
+			case result.Error == "" && result.ExitCode == 0:
+				view.Status, view.StatusText = "success", "完了"
+			default:
+				view.Status, view.StatusText = "failed", "失敗"
+			}
+		} else if sameRunningProcess(request.RunnerPID, request.RunnerStartedAt) {
+			view.Status, view.StatusText = "running", "実行中"
+		}
+		views = append(views, view)
+	}
+	sort.SliceStable(views, func(i, j int) bool { return views[i].StartedAt > views[j].StartedAt })
+	return views, nil
+}
+
 func readBatchRunRequest(path string) (batchRunRequest, error) {
 	var request batchRunRequest
 	if err := readStrictJSON(path, &request); err != nil {
 		return batchRunRequest{}, err
 	}
-	if request.RunID == "" || request.EventKey == "" || request.TaskID == "" || request.TaskTitle == "" || request.ScheduledAt == "" || request.Action.BatPath == "" {
+	if request.RunID == "" || request.EventKey == "" || request.TaskID == "" || request.TaskTitle == "" || request.ScheduledAt == "" || request.RequestedAt == "" || request.Action.BatPath == "" {
 		return batchRunRequest{}, errors.New("BAT実行要求の必須項目が不足しています")
 	}
 	if _, err := time.Parse(time.RFC3339, request.ScheduledAt); err != nil {
 		return batchRunRequest{}, fmt.Errorf("scheduled_atが不正です: %w", err)
+	}
+	if _, err := time.Parse(time.RFC3339, request.RequestedAt); err != nil {
+		return batchRunRequest{}, fmt.Errorf("requested_atが不正です: %w", err)
+	}
+	if request.RunnerStartedAt != "" {
+		if _, err := time.Parse(time.RFC3339Nano, request.RunnerStartedAt); err != nil {
+			return batchRunRequest{}, fmt.Errorf("runner_started_atが不正です: %w", err)
+		}
+	}
+	if request.BatchStartedAt != "" {
+		if _, err := time.Parse(time.RFC3339, request.BatchStartedAt); err != nil {
+			return batchRunRequest{}, fmt.Errorf("batch_started_atが不正です: %w", err)
+		}
 	}
 	return request, nil
 }
@@ -304,6 +440,9 @@ func batchHistoryEventKey(eventKey, runID string) string {
 }
 
 func formatBatchRunResult(result batchRunResult) string {
+	if result.Interrupted {
+		return "BAT実行中断"
+	}
 	if !result.Started {
 		if result.Error == "" {
 			return "BAT起動失敗"

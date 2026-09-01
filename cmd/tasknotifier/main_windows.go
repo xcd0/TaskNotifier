@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/alexflint/go-arg"
 	"github.com/lxn/walk"
@@ -99,6 +100,30 @@ func main() {
 				log.Printf("%s", startupError)
 			} else {
 				log.Printf("BAT/CMDパスを絶対パスへ移行しました。")
+			}
+		}
+
+		if recoverErr := tasknotifier.RecoverInterruptedBatchRuns(paths, time.Now()); recoverErr != nil {
+			log.Printf("中断されたBAT/CMD実行を確認できません: %v", recoverErr)
+		} else {
+			merged, runIDs, mergeChanged, mergeErr := tasknotifier.MergePendingBatchRunResults(paths, data)
+			if mergeErr != nil {
+				log.Printf("BAT/CMD実行結果を取り込めません: %v", mergeErr)
+			} else if mergeChanged {
+				mergedStamp, saveErr := store.Save(merged)
+				if saveErr != nil {
+					log.Printf("BAT/CMD実行結果をstate.jsonへ保存できません: %v", saveErr)
+				} else {
+					data = merged
+					stamp = mergedStamp
+					if cleanupErr := tasknotifier.CleanupBatchRunResults(paths, runIDs); cleanupErr != nil {
+						log.Printf("取り込み済みBAT/CMD実行結果を整理できません: %v", cleanupErr)
+					}
+				}
+			} else if len(runIDs) > 0 {
+				if cleanupErr := tasknotifier.CleanupBatchRunResults(paths, runIDs); cleanupErr != nil {
+					log.Printf("取り込み済みBAT/CMD実行結果を整理できません: %v", cleanupErr)
+				}
 			}
 		}
 	}
