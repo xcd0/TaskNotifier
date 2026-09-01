@@ -82,10 +82,17 @@ func StartBatch(executableDirectory string, action TaskAction) (*BatchProcess, e
 	if err != nil {
 		return nil, err
 	}
-	command := exec.Command(launch.ComSpec, "/D", "/S", "/C", launch.CommandText)
+	command := exec.Command(launch.ComSpec)
 	command.Dir = launch.Directory
+	creationFlags := uint32(0)
 	if launch.HideWindow {
-		command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		creationFlags = 0x08000000
+	}
+	// cmd.exeはCommandLineToArgvW互換の引数解析ではないため、コマンドラインを直接指定する。
+	command.SysProcAttr = &syscall.SysProcAttr{
+		CmdLine:       "/D /S /C " + launch.CommandText,
+		HideWindow:    launch.HideWindow,
+		CreationFlags: creationFlags,
 	}
 	if err := command.Start(); err != nil {
 		return nil, fmt.Errorf("BATを起動できません: %w", err)
