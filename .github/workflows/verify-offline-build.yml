@@ -7,6 +7,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-offline-package:
     runs-on: windows-latest
@@ -81,7 +84,7 @@ jobs:
           $releaseZip = Get-ChildItem "dist/TaskNotifier-v*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $releaseZip) { throw "release ZIP missing" }
           $tokyo = [System.TimeZoneInfo]::FindSystemTimeZoneById("Tokyo Standard Time")
-          $stamp = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tokyo).ToString("yyyyMMdd-HHmm")
+          $stamp = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tokyo).ToString("yyyyMMdd-HHmmss")
           $rootName = "TaskNotifier-Project-$stamp"
           $root = Join-Path $env:RUNNER_TEMP $rootName
           New-Item -ItemType Directory -Force "$root/source/tasknotifier" | Out-Null
@@ -120,3 +123,40 @@ jobs:
           path: ${{ env.PROJECT_ZIP }}
           if-no-files-found: error
           compression-level: 0
+
+      - name: Publish timestamped GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $releaseZip = Get-ChildItem "dist/TaskNotifier-v*.zip" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $releaseZip) { throw "release ZIP missing" }
+          if (-not (Test-Path $env:PROJECT_ZIP)) { throw "project ZIP missing: $env:PROJECT_ZIP" }
+
+          $tokyo = [System.TimeZoneInfo]::FindSystemTimeZoneById("Tokyo Standard Time")
+          $releaseTime = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tokyo)
+          $tag = "build-" + $releaseTime.ToString("yyyyMMdd-HHmmss")
+          $title = "TaskNotifier " + $releaseTime.ToString("yyyy-MM-dd HH:mm:ss") + " JST"
+          $notes = @"
+          Automated verified build from main.
+
+          Commit: $env:GITHUB_SHA
+          Built: $($releaseTime.ToString("yyyy-MM-dd HH:mm:ss")) JST
+
+          Assets:
+          - $($releaseZip.Name): executable + PWA package for operation checking
+          - $(Split-Path -Leaf $env:PROJECT_ZIP): verified source + release package
+          "@
+
+          gh release create $tag `
+            $releaseZip.FullName `
+            $env:PROJECT_ZIP `
+            --repo "${{ github.repository }}" `
+            --target "$env:GITHUB_SHA" `
+            --title $title `
+            --notes $notes
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+
+          Write-Host "Published release $tag"
