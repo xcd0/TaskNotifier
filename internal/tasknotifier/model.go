@@ -15,6 +15,7 @@ const (
 	FormatVersion            = 1
 	TaskFileName             = "tasks.json"
 	LegacyTaskFileName       = "tasks.txt"
+	ScheduleOnce             = "once"
 	ScheduleDailyFixed       = "daily_fixed"
 	ScheduleDailyRandomAfter = "daily_random_after"
 	ScheduleDailyBefore      = "daily_before"
@@ -45,6 +46,8 @@ type Task struct {
 }
 
 type Schedule struct {
+	Date            string `json:"date,omitempty"`
+	MaxOccurrences  int    `json:"max_occurrences,omitempty"`
 	Type            string `json:"type"`
 	Time            string `json:"time"`
 	Minutes         int    `json:"minutes"`
@@ -85,6 +88,7 @@ type TaskAction struct {
 	ShowConsole bool   `json:"show_console"`
 }
 type State struct {
+	FiredCount     int    `json:"fired_count,omitempty"`
 	LastFiredEvent string `json:"last_fired_event"`
 	SnoozeUntil    string `json:"snooze_until"`
 	PausedUntil    string `json:"paused_until,omitempty"`
@@ -177,7 +181,20 @@ func (t Task) Validate() error {
 	if _, _, err := ParseClock(t.Schedule.Time); err != nil {
 		return err
 	}
+	if t.Schedule.MaxOccurrences < 0 || t.Schedule.MaxOccurrences > 1000000 {
+		return errors.New("実行回数は0（無制限）から1000000の範囲です")
+	}
+	if t.State.FiredCount < 0 {
+		return errors.New("実行済み回数は0以上である必要があります")
+	}
 	switch t.Schedule.Type {
+	case ScheduleOnce:
+		if _, err := time.Parse(targetDateLayout, t.Schedule.Date); err != nil {
+			return errors.New("実行日をYYYY-MM-DD形式で指定してください")
+		}
+		if t.Schedule.Minutes != 0 || t.Schedule.RepeatEnabled || t.Schedule.EndEnabled || t.Condition.PeriodEnabled || t.Condition.WeekdaysEnabled || t.Schedule.MaxOccurrences > 1 {
+			return errors.New("1回だけのタスクには繰り返し・補正・期間・曜日条件を設定できません")
+		}
 	case ScheduleDailyFixed:
 		if t.Schedule.Minutes != 0 {
 			return errors.New("daily_fixedのminutesは0である必要があります")
@@ -359,6 +376,8 @@ func FormatWeekdays(ws []string) string {
 func FormatSchedule(s Schedule) string {
 	b := ""
 	switch s.Type {
+	case ScheduleOnce:
+		return fmt.Sprintf("1回だけ %s %s", s.Date, s.Time)
 	case ScheduleDailyFixed:
 		b = fmt.Sprintf("毎日 %s", s.Time)
 	case ScheduleDailyRandomAfter:
@@ -373,6 +392,9 @@ func FormatSchedule(s Schedule) string {
 		if s.EndEnabled {
 			b += " / " + s.EndTime + "まで"
 		}
+	}
+	if s.MaxOccurrences > 0 {
+		b += fmt.Sprintf(" / 合計%d回", s.MaxOccurrences)
 	}
 	return b
 }

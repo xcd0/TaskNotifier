@@ -3,6 +3,7 @@
 package tasknotifier
 
 import (
+	"fmt"
 	"log"
 	"path/filepath"
 	"strings"
@@ -65,7 +66,9 @@ func (app *App) buildWebState() webAppState {
 			}
 		}
 		nextText := "-"
-		if taskPaused(task, now) {
+		if notificationCompleted(task) {
+			nextText = "完了"
+		} else if taskPaused(task, now) {
 			if pausedUntil, err := time.Parse(time.RFC3339, task.State.PausedUntil); err == nil {
 				nextText = "一時停止: " + pausedUntil.Format("01-02 15:04")
 			} else {
@@ -80,6 +83,9 @@ func (app *App) buildWebState() webAppState {
 					nextText = "通知待ち"
 				}
 			}
+		}
+		if limit := occurrenceLimit(task); limit > 0 {
+			conditionText += fmt.Sprintf(" / %d回中%d回完了", limit, task.State.FiredCount)
 		}
 		batText := "なし"
 		if strings.TrimSpace(task.Action.BatPath) != "" {

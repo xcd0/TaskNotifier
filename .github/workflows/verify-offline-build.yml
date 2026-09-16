@@ -23,6 +23,9 @@ jobs:
           go-version: '1.24.0'
           cache: false
 
+      - name: Test PWA limited notifications
+        run: node web/limited-tasks.test.cjs
+
       - name: Prepare vendored dependencies
         shell: pwsh
         run: |

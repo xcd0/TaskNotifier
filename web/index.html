@@ -244,10 +244,23 @@
 
 				<fieldset id="notification-task-options">
 					<legend>通知タイミング</legend>
+					<div id="schedule-date-field" class="field" hidden>
+						<label for="schedule-date">実行日（1回だけ）</label>
+						<input id="schedule-date" type="date">
+						<p class="field-help">指定日時を過ぎていた場合は、次回起動時に通知します。</p>
+					</div>
+					<label class="option-switch"><input id="count-enabled" type="checkbox"><span><strong>指定回数だけ通知する</strong><small>日をまたいだ合計回数です。上限に達すると完了します。</small></span></label>
+					<div id="count-options" class="field" hidden>
+						<label for="max-occurrences">合計通知回数</label>
+						<input id="max-occurrences" type="number" min="1" max="1000000" step="1" value="1">
+						<p class="field-help">OS通知は送信成功、独自ダイアログは確認済みで1回と数えます。スヌーズは回数を消費しません。</p>
+					</div>
+
 					<div class="form-grid">
 						<div class="field">
 							<label for="schedule-type" title="定刻、基準時刻からランダムに後ろへずらす、または指定分数だけ前へずらす方法を選びます。">通知時刻の決め方 <span class="info" tabindex="0" data-tooltip="定刻、基準時刻からランダムに後ろへずらす、または指定分数だけ前へずらす方法を選びます。">?</span></label>
 							<select id="schedule-type">
+								<option value="once">1回だけ・日時指定</option>
 								<option value="daily_fixed">毎日・定刻</option>
 								<option value="daily_random_after">毎日・0〜n分後</option>
 								<option value="daily_before">毎日・n分前</option>

@@ -501,7 +501,7 @@ func validateForLoad(data *TaskFile) ([]string, error) {
 		if task.Schedule.IntervalMinutes == 0 {
 			task.Schedule.IntervalMinutes = 60
 		}
-		if task.Schedule.Type != ScheduleDailyFixed && task.Schedule.Type != ScheduleDailyRandomAfter && task.Schedule.Type != ScheduleDailyBefore {
+		if task.Schedule.Type != ScheduleOnce && task.Schedule.Type != ScheduleDailyFixed && task.Schedule.Type != ScheduleDailyRandomAfter && task.Schedule.Type != ScheduleDailyBefore {
 			task.Enabled = false
 			warnings = append(warnings, fmt.Sprintf("「%s」は未対応のschedule.type %qのため無効扱いです", task.Title, task.Schedule.Type))
 			continue
