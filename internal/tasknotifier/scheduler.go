@@ -37,6 +37,9 @@ func OccurrenceForDate(task Task, target time.Time) (Occurrence, error) {
 	return o[0], nil
 }
 func OccurrencesForDate(task Task, target time.Time, periods []Period) ([]Occurrence, error) {
+	if task.Schedule.Type == ScheduleOnce && target.Format(targetDateLayout) != task.Schedule.Date {
+		return nil, nil
+	}
 	location := target.Location()
 	targetDate := time.Date(target.Year(), target.Month(), target.Day(), 0, 0, 0, 0, location)
 	when, err := firstScheduledTime(task, targetDate)
@@ -82,7 +85,7 @@ func firstScheduledTime(task Task, targetDate time.Time) (time.Time, error) {
 	}
 	when := time.Date(targetDate.Year(), targetDate.Month(), targetDate.Day(), h, m, 0, 0, targetDate.Location())
 	switch task.Schedule.Type {
-	case ScheduleDailyFixed:
+	case ScheduleDailyFixed, ScheduleOnce:
 	case ScheduleDailyRandomAfter:
 		when = when.Add(time.Duration(DeterministicOffset(task.ID, targetDate, task.Schedule.Minutes)) * time.Minute)
 	case ScheduleDailyBefore:
@@ -122,7 +125,7 @@ func DueEvents(data TaskFile, now time.Time) []Event {
 	var events []Event
 	for i := range data.Tasks {
 		task := data.Tasks[i]
-		if task.Kind == TaskKindTodo || !task.Enabled || !NotificationEnabled(task) || taskPaused(task, now) {
+		if task.Kind == TaskKindTodo || notificationCompleted(task) || !task.Enabled || !NotificationEnabled(task) || taskPaused(task, now) {
 			continue
 		}
 		if task.State.SnoozeUntil != "" {
@@ -162,7 +165,7 @@ func NextEvent(data TaskFile, now time.Time) (Event, bool) {
 	var c []Event
 	for i := range data.Tasks {
 		task := data.Tasks[i]
-		if task.Kind == TaskKindTodo || !task.Enabled || !NotificationEnabled(task) || taskPaused(task, now) {
+		if task.Kind == TaskKindTodo || notificationCompleted(task) || !task.Enabled || !NotificationEnabled(task) || taskPaused(task, now) {
 			continue
 		}
 		if task.State.SnoozeUntil != "" {
@@ -172,6 +175,12 @@ func NextEvent(data TaskFile, now time.Time) (Event, bool) {
 				}
 				continue
 			}
+		}
+		if task.Schedule.Type == ScheduleOnce {
+			if o, ok := singleOccurrence(task, now.Location()); ok && o.ScheduledAt.After(now) && !eventAcknowledged(task, o) {
+				c = append(c, eventFromOccurrence(task, o, o.ScheduledAt))
+			}
+			continue
 		}
 		for day := -2; day <= 3; day++ {
 			target := localDay(now).AddDate(0, 0, day)
@@ -201,6 +210,12 @@ func taskPaused(task Task, now time.Time) bool {
 	return err == nil && until.After(now)
 }
 func relevantOccurrences(task Task, periods []Period, now time.Time) []Occurrence {
+	if task.Schedule.Type == ScheduleOnce {
+		if o, ok := singleOccurrence(task, now.Location()); ok {
+			return []Occurrence{o}
+		}
+		return nil
+	}
 	today := localDay(now)
 	var r []Occurrence
 	for day := -2; day <= 1; day++ {
@@ -233,6 +248,10 @@ func dueSnoozedEvent(task Task, periods []Period, now time.Time) (Event, bool) {
 	return eventFromOccurrence(task, o, s), true
 }
 func occurrenceForSnooze(task Task, periods []Period, snooze time.Time) (Occurrence, bool) {
+	if task.Schedule.Type == ScheduleOnce {
+		o, ok := singleOccurrence(task, snooze.Location())
+		return o, ok && !eventAcknowledged(task, o)
+	}
 	var best Occurrence
 	found := false
 	base := localDay(snooze)
@@ -313,3 +332,27 @@ func (q *NotificationQueue) RemoveTask(taskID string) {
 	q.pending = f
 }
 func (q *NotificationQueue) Len() int { return len(q.pending) }
+
+// occurrenceLimit はタスク全体の通知回数上限を返す。0は無制限を表す。
+func occurrenceLimit(task Task) int {
+	if task.Schedule.Type == ScheduleOnce {
+		return 1
+	}
+	return task.Schedule.MaxOccurrences
+}
+
+// notificationCompleted は保存した回数から通知終了を判定する。
+func notificationCompleted(task Task) bool {
+	limit := occurrenceLimit(task)
+	return limit > 0 && task.State.FiredCount >= limit
+}
+
+// singleOccurrence は検索日の範囲によらず単発タスクの予定を復元する。
+func singleOccurrence(task Task, location *time.Location) (Occurrence, bool) {
+	date, err := time.ParseInLocation(targetDateLayout, task.Schedule.Date, location)
+	if err != nil {
+		return Occurrence{}, false
+	}
+	o, err := OccurrenceForDate(task, date)
+	return o, err == nil
+}

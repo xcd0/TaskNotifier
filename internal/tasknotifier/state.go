@@ -12,6 +12,18 @@ func Acknowledge(data TaskFile, event Event) (TaskFile, error) {
 	if index < 0 {
 		return data, fmt.Errorf("対象タスクが見つかりません: %s", event.TaskID)
 	}
+	// テスト通知や確認済みのイベントを重複して数えない。
+	task := &data.Tasks[index]
+	if event.IsTest || notificationCompleted(*task) || eventAcknowledged(*task, Occurrence{EventKey: event.Key}) {
+		return data, nil
+	}
+	if occurrenceLimit(*task) > 0 {
+		task.State.FiredCount++
+		if notificationCompleted(*task) {
+			task.State.Completed = true
+			task.State.CompletedAt = time.Now().Format(time.RFC3339)
+		}
+	}
 	data.Tasks[index].State.LastFiredEvent = event.Key
 	data.Tasks[index].State.SnoozeUntil = ""
 	return data, nil
