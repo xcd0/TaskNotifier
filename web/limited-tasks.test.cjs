@@ -9,7 +9,7 @@ async function main() {
 	const encoded = [0, 1, 2].map(n => fs.readFileSync(path.join(root, `ci-generated/webview.part0${n}`), 'utf8').trim()).join('');
 	const html = zlib.gunzipSync(Buffer.from(encoded, 'base64')).toString();
 	const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
-	const helper = fs.readFileSync(path.join(__dirname, 'limited-tasks.js'), 'utf8');
+	const helper = fs.readFileSync(path.join(__dirname, 'limited-tasks.js'), 'utf8').replace(/\r\n/g, '\n');
 	assert.ok(script.includes(helper), 'generated UI must contain the current helper source');
 	const context = vm.createContext({window: {addEventListener() {}}, document: {getElementById: () => ({addEventListener() {}})}, console, Date, setTimeout, structuredClone});
 	vm.runInContext(script.replace('qe();})();', 'globalThis.testAPI={Ce,X,Le,ye,countNotification,taskFinished,Ee};})();'), context);
